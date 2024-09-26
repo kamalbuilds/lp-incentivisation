@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PoolKey} from "pancake-v4-core/src/types/PoolKey.sol";
-import {BalanceDelta, toBalanceDelta} from "pancake-v4-core/src/types/BalanceDelta.sol";
-import {ICLPoolManager} from "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
-import {CLBaseHook} from "./CLBaseHook.sol";
+import { PoolKey } from "pancake-v4-core/src/types/PoolKey.sol";
+import { BalanceDelta, toBalanceDelta } from "pancake-v4-core/src/types/BalanceDelta.sol";
+import { ICLPoolManager } from "pancake-v4-core/src/pool-cl/interfaces/ICLPoolManager.sol";
+import { CLBaseHook } from "./CLBaseHook.sol";
+import { BrevisApp } from "./BrevisApp.sol";
 
-contract LiquidityIncentiveHook is CLBaseHook {
+contract LiquidityIncentiveHook is CLBaseHook, BrevisApp {
     using SafeMath for uint256;
 
     struct LiquidityInfo {
@@ -19,15 +20,16 @@ contract LiquidityIncentiveHook is CLBaseHook {
     }
 
     mapping(address => LiquidityInfo) public liquidityProviders;
-    LayerZeroInterface public layerZero;
+    bytes32 public vkHash; // Verifying key hash used for proof validation
 
     event LiquidityAdded(address indexed sender, uint256 amount0, uint256 amount1, uint256 timestamp);
     event LiquidityRemoved(address indexed sender, uint256 amount0, uint256 amount1, uint256 timestamp);
     event RewardGranted(address indexed provider, uint256 rewardAmount, uint256 timestamp);
     
-    constructor(ICLPoolManager _poolManager, LayerZeroInterface _layerZero) CLBaseHook(_poolManager) {
-        layerZero = _layerZero;
-    }
+    constructor(
+        ICLPoolManager _poolManager, 
+        address _brevisRequest
+    ) CLBaseHook(_poolManager) BrevisApp(_brevisRequest) {}
 
     function getHooksRegistrationBitmap() external pure override returns (uint16) {
         return _hooksRegistrationBitmapFrom(
@@ -77,7 +79,6 @@ contract LiquidityIncentiveHook is CLBaseHook {
     // Reward calculation based on provided requirements
     function calculateRewardMultiplier(ICLPoolManager.ModifyLiquidityParams calldata params)
         internal
-        view
         returns (uint256)
     {
         uint256 multiplier = 1;
@@ -87,7 +88,7 @@ contract LiquidityIncentiveHook is CLBaseHook {
             multiplier = multiplier.add(1); // Add bonus after 30 days
         }
 
-        // Utility-based reward: Apply bonuses during volatile or low liquidity periods
+        // Utility-based reward: Apply bonuses during volatile or low liquidity periods using Brevis proof
         if (isLowLiquidityPeriod()) {
             multiplier = multiplier.add(2); // Double bonus during low liquidity
         }
@@ -105,16 +106,42 @@ contract LiquidityIncentiveHook is CLBaseHook {
         return multiplier;
     }
 
-    function isLowLiquidityPeriod() internal view returns (bool) {
-        // will implement the  detection logic based on brevis market data
-        return true; // @kamal to be updated with actual market checks
+    // Utilize Brevis proof to determine low liquidity periods
+    function isLowLiquidityPeriod() internal returns (bool) {
+        // Request proof from Brevis for liquidity and volatility data
+        requestBrevisProof("liquidity", "volatility");
+        return true; // Placeholder: Actual verification handled in callback
     }
 
-   // to be implemented in the future @kamal , i think i will utilise brevis here instead of lz
+    // Callback function to handle proof results from Brevis
+    function handleProofResult(
+        bytes32 /*_requestId*/,
+        bytes32 _vkHash,
+        bytes calldata _circuitOutput
+    ) internal override {
+        // Verify the proof using the designated verifying key
+        require(vkHash == _vkHash, "Invalid verifying key");
+
+        // Decode the circuit output to extract liquidity and volatility data
+        (uint256 liquidityLevel, uint256 volatilityLevel) = decodeOutput(_circuitOutput);
+
+        // Example condition for adjusting rewards based on data
+        if (liquidityLevel < 1000 && volatilityLevel > 75) {
+            // Adjust rewards based on detected conditions
+            emit RewardGranted(msg.sender, 100, block.timestamp); // Example reward adjustment
+        }
+    }
+
+    // Decodes the Brevis circuit output to extract data
+    function decodeOutput(bytes calldata output) internal pure returns (uint256, uint256) {
+        uint256 liquidityLevel = uint256(bytes32(output[0:32]));
+        uint256 volatilityLevel = uint256(bytes32(output[32:64]));
+        return (liquidityLevel, volatilityLevel);
+    }
+
     function checkCrossPlatformEligibility(address sender) internal returns (bool) {
-        // Cross-platform reward validation via LayerZero or other integrations
-        // Communicate and validate cross-chain data (simplified for demo)
-        return layerZero.validateLiquidity(sender);
+        // Cross-platform reward validation via Brevis or other integrations
+        return true; // Placeholder
     }
 
     // Milestone and penalty logic when removing liquidity
@@ -146,11 +173,9 @@ contract LiquidityIncentiveHook is CLBaseHook {
         uint256 reward = info.amount.mul(info.rewardMultiplier);
         info.lastMilestoneTime = block.timestamp;
         emit RewardGranted(sender, reward, block.timestamp);
-        // @kamal Logic for distributing rewards
     }
 
     function calculateEarlyWithdrawalPenalty(LiquidityInfo memory info) internal pure returns (uint256) {
-        // Penalty calculation based on early withdrawal
         return info.amount.mul(10).div(100); // 10% penalty
     }
 
@@ -160,3 +185,18 @@ contract LiquidityIncentiveHook is CLBaseHook {
         return delta;
     }
 }
+
+ /**
+     * @notice config params to handle optimitic proof result
+     * @param _challengeWindow The challenge window to accept optimistic result. 0: POS, maxInt: disable optimistic result
+     * @param _sigOption bitmap to express expected sigs: bit 0 is bvn, bit 1 is avs
+     */
+    function setBrevisOpConfig(uint64 _challengeWindow, uint8 _sigOption) external onlyOwner {
+        brevisOpConfig = BrevisOpConfig(_challengeWindow, _sigOption);
+    }
+
+    
+    // vkHash represents the unique circuit app logic
+    function setVkHash(bytes32 _vkHash) external onlyOwner {
+        vkHash = _vkHash;
+    }
