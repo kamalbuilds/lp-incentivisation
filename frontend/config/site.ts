@@ -1,7 +1,7 @@
 export type SiteConfig = typeof siteConfig
 
 export const siteConfig = {
-  name: "Next.js",
+  name: "LP Incentivisation Hook",
   description:
     "Beautifully designed components that you can copy and paste into your apps. Accessible. Customizable. Open Source.",
   mainNav: [
@@ -11,8 +11,8 @@ export const siteConfig = {
     },
   ],
   links: {
-    twitter: "https://twitter.com/shadcn",
-    github: "https://github.com/shadcn/ui",
+    twitter: "https://twitter.com/0xkamal7",
+    github: "https://github.com/kamalbuilds",
     docs: "https://ui.shadcn.com",
   },
 }
